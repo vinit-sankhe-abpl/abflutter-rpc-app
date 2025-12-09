@@ -21,8 +21,18 @@
         // EARLY MESSAGE LISTENER (fixes handshake races)
         // ----------------------------------------------
         window.addEventListener("message", (event) => {
-            const msg = event.data;
+            // FAIL-SAFE #1: ignore messages not coming from parent frame
+			if (event.source !== window.parent) {
+				return;
+			}
+			
+			const msg = event.data;
             log("Received message: " + JSON.stringify(msg));
+			
+		    // FAIL-SAFE: ignore duplicate parent-init
+			if (msg.type === "parent-init" && connected) {
+				return; // THIS IS THE MISSING LINE
+			}
 
             // HANDSHAKE FROM GAS WRAPPER
             if (msg.type === "parent-init") {
