@@ -36,24 +36,37 @@
             }
         });
 
-        // -------------------------------
-        // SEND RPC TO GAS PARENT
-        // -------------------------------
-        function requestTemperature() {
-            if (!parentOrigin) return alert("Parent not ready");
-            const requestId = Date.now().toString();
+		// -------------------------------
+		// SEND RPC TO GAS PARENT (Dynamic lat/lng)
+		// -------------------------------
+		function requestTemperature() {
+			if (!parentOrigin) return alert("Parent not ready");
 
-            window.parent.postMessage({
-                type: "flutter-request",   // GAS wrapper expects this
-                requestId: requestId,
-                payload: {
-                    action: "temperature",
-                    city: "Mumbai"
-                }
-            }, parentOrigin);
+			// 1. Capture current device location
+			navigator.geolocation.getCurrentPosition((pos) => {
+				const lat = pos.coords.latitude;
+				const lng = pos.coords.longitude;
 
-            log("Sent temperature request, reqId=" + requestId);
-        }
+				const requestId = Date.now().toString();
+
+				// 2. Send RPC to GAS parent with lat/lng
+				window.parent.postMessage({
+					type: "flutter-request",   // GAS wrapper expects this
+					requestId: requestId,
+					payload: {
+						action: "temperature",
+						lat: lat,
+						lng: lng
+					}
+				}, parentOrigin);
+
+				log(`Sent temperature request (lat=${lat}, lng=${lng}), reqId=${requestId}`);
+
+			}, (error) => {
+				log("Geolocation error: " + error.message);
+				alert("Unable to fetch location. Permission denied?");
+			});
+		}
 
         // -------------------------------
         // DEVICE EVENTS → GAS
