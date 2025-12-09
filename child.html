@@ -21,6 +21,8 @@
         // -------------------------------
         window.addEventListener("message", (event) => {
             const msg = event.data;
+						
+			log("Received message: " + JSON.stringify(msg));
 
             // GAS parent tells us its origin
             if (msg.type === "parent-init") {
