@@ -2,7 +2,7 @@
 <html>
 <head>
     <meta charset="UTF-8" />
-    <title>GAS RPC POC - Simple Client</title>
+    <title>GAS RPC POC - Full Device Client</title>
 
     <!-- Bootstrap -->
     <link rel="stylesheet"
@@ -15,108 +15,103 @@
 
     <script>
         let parentOrigin = null;
+        let connected = false;
 
-        // -------------------------------
-        // RECEIVE HANDSHAKE FROM GAS PARENT
-        // -------------------------------
+        // ----------------------------------------------
+        // EARLY MESSAGE LISTENER (fixes handshake races)
+        // ----------------------------------------------
         window.addEventListener("message", (event) => {
             const msg = event.data;
-						
-			log("Received message: " + JSON.stringify(msg));
+            log("Received message: " + JSON.stringify(msg));
 
-            // GAS parent tells us its origin
+            // HANDSHAKE FROM GAS WRAPPER
             if (msg.type === "parent-init") {
                 parentOrigin = event.origin;
-                log("Parent initialized: " + parentOrigin);
+                connected = true;
+
+                // acknowledge handshake
+                window.parent.postMessage(
+                    { type: "child-ready" },
+                    parentOrigin
+                );
+
+                log("Parent connection established, origin=" + parentOrigin);
                 return;
             }
 
-            // GAS RPC response
+            // RPC RESPONSE
             if (msg.type === "gas-response") {
-                log("RPC Response:", msg);
+                log("[GAS RESPONSE] " + JSON.stringify(msg));
                 return;
             }
         });
 
-		// -------------------------------
-		// SEND RPC TO GAS PARENT (Dynamic lat/lng)
-		// -------------------------------
-		function requestTemperature() {
-			// 1. Capture current device location
-			navigator.geolocation.getCurrentPosition((pos) => {
-				const lat = pos.coords.latitude;
-				const lng = pos.coords.longitude;
+        // ----------------------------------------------
+        // ANNOUNCE CHILDS PRESENCE ASAP
+        // ----------------------------------------------
+        window.addEventListener("load", () => {
+            window.parent.postMessage(
+                { type: "child-hello" },
+                "*"
+            );
+        });
 
-				const requestId = Date.now().toString();
-				
-				log(`Sending temperature request (lat=${lat}, lng=${lng}), reqId=${requestId}`);
-				
-				if (!parentOrigin) throw new Error("Parent not ready");
+        // ----------------------------------------------
+        // UTIL LOGGING
+        // ----------------------------------------------
+        function log(...args) {
+            const out = document.getElementById("log");
+            out.innerText += args.map(a => typeof a === "string" ? a : JSON.stringify(a)).join(" ") + "\n";
+        }
 
-				// 2. Send RPC to GAS parent with lat/lng
-				window.parent.postMessage({
-					type: "flutter-request",   // GAS wrapper expects this
-					requestId: requestId,
-					payload: {
-						action: "temperature",
-						lat: lat,
-						lng: lng
-					}
-				}, parentOrigin);
-
-				log(`Sent temperature request successfully!`);
-
-			}, (error) => {
-				log("Geolocation error: " + error.message);
-				alert("Unable to fetch / post location or location permission denied.");
-			});
-		}
-
-        // -------------------------------
-        // DEVICE EVENTS → GAS
-        // -------------------------------
+        // ----------------------------------------------
+        // SEND DEVICE EVENTS TO GAS PARENT
+        // ----------------------------------------------
         function sendDeviceEvent(kind, data, meta={}) {
-            if (!parentOrigin) return alert("Parent not ready");
+            if (!connected) return alert("Parent not connected yet!");
 
             window.parent.postMessage({
                 type: "device-event",
-                payload: {
-                    kind,
-                    data,
-                    meta
-                }
+                payload: { kind, data, meta }
             }, parentOrigin);
 
-            log("Device event sent:", {kind, meta});
+            log(`[DEVICE EVENT SENT] kind=${kind}`);
         }
 
-        // CAMERA (simple — stops at grabFrame())
+        // ----------------------------------------------
+        // CAMERA SNAPSHOT
+        // ----------------------------------------------
         async function captureCamera() {
             try {
-                const stream = await navigator.mediaDevices.getUserMedia(
-                    { video: true, audio: false }
-                );
-
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
                 const track = stream.getVideoTracks()[0];
-                const imageCapture = new ImageCapture(track);
-                const bitmap = await imageCapture.grabFrame();
+                const capture = new ImageCapture(track);
+                const bitmap = await capture.grabFrame();
 
-                // Draw to canvas → base64
                 const canvas = document.createElement("canvas");
                 canvas.width = bitmap.width;
                 canvas.height = bitmap.height;
+
                 const ctx = canvas.getContext("2d");
                 ctx.drawImage(bitmap, 0, 0);
+
                 const dataUrl = canvas.toDataURL("image/png");
 
-                sendDeviceEvent("camera", dataUrl, {width: bitmap.width, height: bitmap.height});
+                sendDeviceEvent("camera", dataUrl, {
+                    width: bitmap.width,
+                    height: bitmap.height
+                });
+
                 stream.getTracks().forEach(t => t.stop());
+
             } catch (err) {
-                log("Camera error:", err);
+                log("Camera error: " + err);
             }
         }
 
-        // LOCATION
+        // ----------------------------------------------
+        // GEOLOCATION
+        // ----------------------------------------------
         function sendLocation() {
             navigator.geolocation.getCurrentPosition((pos) => {
                 sendDeviceEvent("location", {
@@ -125,78 +120,104 @@
                     accuracy: pos.coords.accuracy
                 });
             }, (err) => {
-                log("Location error:", err);
+                log("Location error: " + err.message);
             });
         }
 
+        // ----------------------------------------------
         // FILE PICKER
+        // ----------------------------------------------
         function pickFile() {
             const input = document.createElement("input");
             input.type = "file";
-            input.onchange = async () => {
+
+            input.onchange = () => {
                 const file = input.files[0];
                 const reader = new FileReader();
+
                 reader.onload = () => {
                     sendDeviceEvent("file", reader.result, {
                         name: file.name,
                         size: file.size,
-                        type: file.type
+                        mime: file.type
                     });
                 };
+
                 reader.readAsDataURL(file);
             };
+
             input.click();
         }
 
-        // MICROPHONE — record 3 seconds
+        // ----------------------------------------------
+        // MICROPHONE (record 3 seconds)
+        // ----------------------------------------------
         async function recordAudio() {
             try {
-                const stream = await navigator.mediaDevices.getUserMedia({audio: true});
-                const mediaRecorder = new MediaRecorder(stream);
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                const recorder = new MediaRecorder(stream);
 
                 const chunks = [];
-                mediaRecorder.ondataavailable = e => chunks.push(e.data);
+                recorder.ondataavailable = e => chunks.push(e.data);
 
-                mediaRecorder.onstop = () => {
-                    const blob = new Blob(chunks, {type: "audio/webm"});
+                recorder.onstop = () => {
+                    const blob = new Blob(chunks, { type: "audio/webm" });
                     const reader = new FileReader();
+
                     reader.onloadend = () => {
-                        sendDeviceEvent("mic", reader.result, {duration_sec: 3});
+                        sendDeviceEvent("mic", reader.result, {
+                            duration_sec: 3
+                        });
                     };
+
                     reader.readAsDataURL(blob);
                 };
 
-                mediaRecorder.start();
-                log("Recording 3 seconds...");
-                setTimeout(() => mediaRecorder.stop(), 3000);
+                recorder.start();
+                log("Recording audio for 3 seconds...");
+                setTimeout(() => recorder.stop(), 3000);
 
             } catch (err) {
-                log("Mic error:", err);
+                log("Microphone error: " + err);
             }
         }
 
-        // Utility log
-        function log(...args) {
-            const out = document.getElementById("log");
-            out.innerText += args.map(a => typeof a === "string" ? a : JSON.stringify(a)).join(" ") + "\n";
+        // ----------------------------------------------
+        // RPC: REQUEST TEMPERATURE USING LAT/LNG
+        // ----------------------------------------------
+        function requestTemperature() {
+            navigator.geolocation.getCurrentPosition((pos) => {
+                const requestId = Date.now().toString();
+
+                window.parent.postMessage({
+                    type: "flutter-request",
+                    requestId,
+                    payload: {
+                        action: "temperature",
+                        lat: pos.coords.latitude,
+                        lng: pos.coords.longitude
+                    }
+                }, parentOrigin);
+
+                log("Temperature request sent.");
+
+            }, (err) => {
+                alert("Location required for temperature lookup: " + err.message);
+            });
         }
     </script>
 </head>
 
 <body class="container">
 
-    <h2>GAS RPC POC — Plain HTML Client</h2>
-    <p>This page runs in GitHub Pages → loaded inside GAS wrapper iframe → communicates via postMessage.</p>
+    <h2>GAS RPC POC — Full Device API Client</h2>
+    <p>Running inside GitHub Pages → inside GAS iframe</p>
 
-    <hr>
-
-    <button class="btn btn-primary mb-2" onclick="requestTemperature()">Fetch Temperature</button>
-    <br>
-
-    <button class="btn btn-secondary mb-2" onclick="captureCamera()">Capture Camera Image</button><br>
+    <button class="btn btn-primary mb-2" onclick="requestTemperature()">Get Temperature</button><br>
+    <button class="btn btn-secondary mb-2" onclick="captureCamera()">Capture Camera</button><br>
     <button class="btn btn-secondary mb-2" onclick="sendLocation()">Send Location</button><br>
     <button class="btn btn-secondary mb-2" onclick="pickFile()">Pick File</button><br>
-    <button class="btn btn-secondary mb-2" onclick="recordAudio()">Record 3s Audio</button><br>
+    <button class="btn btn-secondary mb-2" onclick="recordAudio()">Record Audio (3s)</button><br>
 
     <hr>
     <h5>Console Log</h5>
