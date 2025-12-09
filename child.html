@@ -40,14 +40,16 @@
 		// SEND RPC TO GAS PARENT (Dynamic lat/lng)
 		// -------------------------------
 		function requestTemperature() {
-			if (!parentOrigin) return alert("Parent not ready");
-
 			// 1. Capture current device location
 			navigator.geolocation.getCurrentPosition((pos) => {
 				const lat = pos.coords.latitude;
 				const lng = pos.coords.longitude;
 
 				const requestId = Date.now().toString();
+				
+				log(`Sending temperature request (lat=${lat}, lng=${lng}), reqId=${requestId}`);
+				
+				if (!parentOrigin) throw new Error("Parent not ready");
 
 				// 2. Send RPC to GAS parent with lat/lng
 				window.parent.postMessage({
@@ -60,11 +62,11 @@
 					}
 				}, parentOrigin);
 
-				log(`Sent temperature request (lat=${lat}, lng=${lng}), reqId=${requestId}`);
+				log(`Sent temperature request successfully!`);
 
 			}, (error) => {
 				log("Geolocation error: " + error.message);
-				alert("Unable to fetch location. Permission denied?");
+				alert("Unable to fetch / post location or location permission denied.");
 			});
 		}
 
